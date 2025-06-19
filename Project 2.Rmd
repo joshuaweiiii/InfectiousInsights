@@ -1,0 +1,285 @@
+---
+title: "Project2"
+author: "Joshua Wei"
+date: "2024-11-23"
+output: pdf_document
+---
+
+```{r}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, 
+                      warning = FALSE, fig.align = "center", 
+                      fig.width = 10)
+options(scipen = 999) #Remove the scientific notation
+```
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(car)
+library(MASS)
+
+df = read.csv("/Users/joshuawei/Downloads/UC Davis/Fall Quarter 2024/STA 108/SENIC2.csv")
+colnames(df) = c("Length", "Age", "InfectionRisk", 
+                 "Culturing", "ChestXray", "Beds", 
+                 "MedSchool", "Region", "DailyCensus", "Nurses", "Facilities")
+df$MedSchool = factor(df$MedSchool)
+df$Region = factor(df$Region)
+```
+
+*I*. Introduction: A small introduction about the goal, what data you use, and what
+model you use.
+
+I am using the SENIC2 Data, which aims to determine whether infection surveillance and control programs have a reduced effect on the length of stay in a United States hospital for multiple patients. My goal for this project is to determine exactly which variables out of 11 have the highest effect on the data, and whether fitting a multiple linear regression model onto those variable's data could help me determine interesting facts about the relationship between the x variables and y. A recent study done by me used simple linear regression to predict length of stay, but as I mentioned in that previous study, "there is a chance that two or more variables together could affect the response variable." 
+
+*II*. Exploratory Data Analysis: Summarize the main characteristics of the dataset
+that relate to your goal. This should include summary plots describing the
+relationship between your explanatory variables and the response variable, and
+numerical summaries you find interesting.
+
+```{r}
+
+for (var in names(df)) {
+  print(paste("Summary for variable:", var))
+  print(summary(df[[var]]))
+}
+
+for (var in names(df)) {
+  print(ggplot(df, aes(x = df[[var]], y = df$Length)) +
+      geom_point() + 
+        geom_smooth(method = "lm", se = FALSE) +
+        labs(title = paste(var, "vs Length"),
+             x = var,
+             y = "Length"))
+}
+
+ggplot(df, aes(x = df$Length)) +
+  geom_histogram() +
+  labs(x = "Length of Stay in Hospital",
+       y = "Count")
+```
+
+To explain what I did, I first calculated the five number summary to give myself an idea of the range and the mean statistic for each variable. I then proceeded to graph each variable separately against the Y variable alongside a regression line to give myself a more visual representation of the number summaries and came up with a couple findings.
+1. Besides the categorical variables, each individual explanatory variable has a positive relationship with the response variable. 
+2. Judging by the graph for Medical School Affiliations, only a select handful of hospitals are medical school affiliated. 
+3. Funnily enough, each explanatory variable had around two outliers that we will have to account for in a later part of this project. 
+4. For certain explanatory variables like the number of beds or the daily census, the data is fairly right skewed with more data on the lesser side. 
+
+*III*. Model Selection: Perform Model Selections based on your own goal of
+prediction or correctness. Report your final linear regression model. Explain your
+model selection procedures and justify how you choose your final model.
+
+```{r}
+full_model = lm(Length ~ Age + InfectionRisk + Culturing + 
+                  ChestXray + Beds + MedSchool + 
+                  Region + DailyCensus + Nurses + Facilities, df)
+vif(full_model)
+cor(df[c("DailyCensus", "Beds", "Nurses")], use = "complete.obs")
+
+model1 = lm(Length ~ . - Beds, df)
+model2 = lm(Length ~ . - DailyCensus, df)
+model3 = lm(Length ~ . - Nurses, df)
+
+BIC(model1)
+BIC(model2) 
+BIC(model3)
+
+fixed_model = lm(Length ~ Age + InfectionRisk + Culturing + 
+                   ChestXray + MedSchool + Region + 
+                   DailyCensus + Facilities, df)
+#removes Beds and Nurses variable because of multicollinearity
+fixed_df = dplyr::select(df, -Beds, -Nurses) 
+
+empty_model = lm(Length ~ 1, fixed_df)
+n = nrow(fixed_df)
+
+forward.model.BIC = stepAIC(empty_model,  
+                            scope = list(lower = empty_model, upper= fixed_model), 
+                            k = log(n), direction = "forward")
+
+#Final Model = Length ~ InfectionRisk(X2) + Region(X7) + DailyCensus(X8) + Age(X1)
+final_model = lm(Length ~ InfectionRisk + Region + DailyCensus + Age, fixed_df)
+summary(final_model)
+BIC(final_model)
+```
+
+For model selection, I chose the goal of finding the most correct model using BIC. With that in mind, I first regressed a model with all the variables. I used the Variance Inflation Factor on the full model and deduced that the Daily Census (X8), Number of Beds (X5) and Number of Nurses (X9) variables had a VIF score of 34.42, 36.11, and 7.05 respectively. With a higher VIF than 5, I tested the correlation between the three variables and found a correlation of about 0.981 between Daily Census and Beds as well as above a 0.9 correlation for both Nurses and Beds, Nurses and Daily Census, which implies that all three variables are highly correlated. I made the decision to remove two of the three variables and tested three full models leaving one of the variables out for each. I first looked at the Adjusted R2 and found that the Adjusted R2 when removing the DailyCensus variable was 0.57 as opposed to removing the Beds variable with an Adjusted R2 of 0.53 as opposed to removing the Nurses variable with 0.55. This was one hint that I should remove both the beds and nurses variable. The second was using the Bayesian Information Criterion (BIC). The full model without the Beds variable had the lowest BIC of 414.9, which indicates a better fit and a smaller amount of information lost. With all that said, I changed my full model to include all variables except the Beds and Nurses variable. Now's the time for the fun part. I used the stepAIC function with my k value as log(n) instead of 2 to prioritize using BIC as my main model selection criterion. With that, I obtained my final multi-linear regression model with a BIC score of 408.87: 
+Length ~ InfectionRisk(X2) + Region(X7) + DailyCensus(X8) + Age(X1) 
+
+*IV*. Model Diagnostics: Perform diagnostics to check the assumptions. Remove
+outliers, etc. Report your outliers in a table, and the table should go in your
+plot/table appendix. You do not need to consider the transformation of variables
+
+DIAGNOSTICS
+1. Plot ei versus xi (before removing outliers)
+```{r}
+ei_before = final_model$residuals
+xi_before = final_model$fitted.values
+
+final_df = fixed_df %>%
+  dplyr::select(Length, InfectionRisk, Age, Region, DailyCensus) %>% #final model variables
+  mutate(ei_before = ei_before,
+         xi_before = xi_before)
+
+ggplot(final_df, mapping = aes(x = xi_before,y = ei_before)) + 
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  labs(x = "Fitted values (xi)",
+       y = "Residuals (ei)")
+
+final_df[which(abs(final_df$ei_before) > 2.5),]
+```
+From my analysis on the residual plot, I can deduce that there are 5 total outliers outside of my threshold of abs(2.5). This is undesirable because it could possibly induce non-constant variance, non-normality, or possibly non-linearity.
+
+2. Histogram of ei (before removing outliers)
+```{r}
+
+ggplot(final_df, mapping = aes(x = ei_before)) + 
+  geom_histogram() +
+  labs(x = "Residuals (ei)",
+       y = "Count")
+```
+Looking at the histogram of the residuals, we can deduce that this graph is right skewed with a couple outliers. Although it looks fairly normally distributed, we have to take into account the outliers. The presence of outliers makes this diagnostic fairly violated. 
+
+3. Normal Probability/QQ Plot (before removing outliers)
+```{r}
+qqnorm(ei_before)
+qqline(ei_before, col = "red")
+```
+Judging from this qq plot, we can say that at first glance this plot is approximately normal with about five outliers, as mentioned before by the other previous plots. But the outliers make the qq plot more right skewed because the outliers on the right are above the qq line. 
+
+4. Test for Normality
+```{r}
+shapiro.test(ei_before)
+```
+Ho: The data is normally distributed
+Ha: The data is not normally distributed
+
+From the Shapiro Wilks Test, we can come to the conclusion that the residuals are not normally distributed. This is solely because the outliers, which make the p value almost equivalent to 0. Since the p value is lower than our typical significance levels, we reject the null hypothesis and claim that the data is not normally distributed.
+
+5. Test for Constant Variance
+```{r}
+Group = rep("Lower",nrow(final_df)) 
+Group[final_df$Length > median(final_df$Length)] = "Upper"
+Group = as.factor(Group)
+final_df$new_group = Group
+
+fligner.test(ei_before ~ new_group, final_df)
+```
+From the Fligner-Kileen Test, we get a p value of 0.42, which is bigger than our usual significance level of 0.05. This means that our errors have constant variance. On the otherside, if we examine the residuals graph, we can conclude that there is indeed not a constant variance because of the five outliers. Funny enough, this difference is acceptable. 
+
+High Leverage Points (Hat Values)
+```{r}
+leverage = hatvalues(final_model)
+threshold = (2*7)/112
+which(leverage > threshold)
+```
+Using the hatvalues function, I found my high leverage points (20, 45, 52, 53, 62, 111). This means that these values are far from the average of all predictor values.
+
+Influential Point Detection (Cooks Distance)
+```{r}
+cutoff = 7/112 #p/n
+cd = cooks.distance(final_model)
+influential_points = which(cd > cutoff)
+```
+
+Removing Influential Points/Outliers
+```{r}
+summary(full_model)
+BIC(full_model)
+clean_df = final_df[-influential_points,]
+clean_model = lm(Length ~ InfectionRisk + Region + DailyCensus + Age, clean_df)
+summary(clean_model)
+BIC(clean_model)
+```
+
+DIAGNOSTICS 
+1. Plot ei versus xi (after removing outliers)
+```{r}
+ei_after = clean_model$residuals
+xi_after = clean_model$fitted.values
+
+ggplot(clean_df, mapping = aes(x = xi_after,y = ei_after)) + 
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  labs(x = "Fitted values (xi)",
+       y = "Residuals (ei)")
+```
+
+2. Histogram of ei (after removing outliers)
+```{r}
+
+ggplot(clean_df, mapping = aes(x = ei_after)) +
+  geom_histogram() +
+  labs(x = "Residuals (ei)",
+       y = "Count")
+```
+
+3. Normal Probability/QQ Plot (after removing outliers)
+```{r}
+qqnorm(ei_after)
+qqline(ei_after, col = "red")
+```
+
+4. Test for Normality (after removing outliers)
+```{r}
+shapiro.test(ei_after)
+```
+
+5. Test for Constant Variance (after removing outliers)
+```{r}
+Group = rep("Lower", nrow(clean_df)) 
+Group[clean_df$Length > median(clean_df$Length)] = "Upper"
+Group = as.factor(Group)
+clean_df$new_group = Group
+
+fligner.test(ei_after ~ new_group, clean_df)
+```
+
+*V*. Analysis and Interpretation: Based on a dataset without outliers, report back to
+your final model, confidence interval, test statistics, p-values, nulls and
+alternatives, etc. You may use tables to report those values to organize your
+work, and the tables should go in your plot/table appendix. Remember to write
+your results in full sentences where possible. State your conclusion and
+inference that you may draw from your corresponding tests or confidence
+intervals. These should all be in terms of your problem.
+
+```{r}
+#Simultaneous Confidence Intervals
+se = summary(clean_model)$coefficients[,"Std. Error"]
+adjustment = 1 - (0.05/(2*7))
+t_crit = qt(adjustment, 108-7)
+
+ci_lower = coef(clean_model) - (t_crit * se)
+ci_upper = coef(clean_model) + (t_crit * se)
+
+ci = data.frame(
+  Estimate = coef(clean_model),
+  Lower = ci_lower,
+  Upper = ci_upper
+)
+ci
+
+#Hypothesis Testing (General Linear Test)
+
+new_full_df = df[-influential_points,]
+new_full_model = lm(Length ~ ., new_full_df)
+
+anova(clean_model, new_full_model)
+
+```
+Ho: reduced model fits better (subset of the "p" beta's are 0)
+Ha: reduced model fits worse (some of the subset of beta's != 0)
+
+
+*VI*. Conclusion: Summary briefly of your findings. You do not have to re-iterate your
+numeric values here but summarize all relevant findings. State one limitation of
+your final model and one suggestion you could make your final model perform
+better.
+
+\newpage
+
+# R Appendix 
+```{r, ref.label=knitr::all_labels(), eval = F, echo = T}
+
+```
